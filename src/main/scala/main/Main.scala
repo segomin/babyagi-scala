@@ -1,5 +1,6 @@
 package main
 
+import com.typesafe.config.ConfigFactory
 import little.json.Implicits.{*, given}
 import little.json.Json
 import Config.OBJECTIVE
@@ -11,10 +12,12 @@ import scala.collection.mutable.ArrayDeque
 import scala.io.AnsiColor.*
 
 object Config {
-  //#Set API Keys
-  val OPENAI_API_KEY = ""
-  val PINECONE_API_KEY = ""
-  val PINECONE_ENVIRONMENT = "asia-southeast1-gcp-free"
+  private val conf = ConfigFactory.load()
+
+  //#Set API Keys (from .env file with `-Dconfig.file=.env` VM option)
+  val OPENAI_API_KEY = conf.getString("OPENAI_API_KEY")
+  val PINECONE_API_KEY = conf.getString("PINECONE_API_KEY")
+  val PINECONE_ENVIRONMENT = Option(conf.getString("PINECONE_ENVIRONMENT")).getOrElse("asia-southeast1-gcp-free")
 
   //#Set Variables
   val YOUR_TABLE_NAME = "test-table"
@@ -27,6 +30,10 @@ object Config {
 @main
 def main(): Unit = {
   val pinecone = PineCone(Config.PINECONE_API_KEY, Config.PINECONE_ENVIRONMENT, Config.YOUR_TABLE_NAME, Config.PINECONE_DIMENSION)
+  println(s"$CYAN$BOLD\n*****OBJECTIVE*****\n$RESET")
+  println(Config.OBJECTIVE)
+
+  pinecone.init()
   val openAI = OpenAI(Config.OPENAI_API_KEY)
   val first = Task(1, Config.YOUR_FIRST_TASK)
   TaskService.run(first, pinecone, openAI, Config.OBJECTIVE)
@@ -60,6 +67,7 @@ object TaskService {
       //      # Step 1: Pull the first task
       val task = taskList.dequeue()
       println(s"$GREEN$BOLD\n*****NEXT TASK*****\n$RESET")
+      print(s"${task.taskId}: ${task.taskName}")
 
       val result = agent.executionAgent(task.taskName)
       println(s"$YELLOW$BOLD\n*****TASK RESULT*****\n$RESET")
@@ -104,11 +112,11 @@ object TaskService {
 }
 
 class OpenAI(val apiKey: String) {
-  val headers = Map("Authorization" -> s"Bearer $apiKey", "Content-Type" -> "application/json")
+  private val headers = Map("Authorization" -> s"Bearer $apiKey", "Content-Type" -> "application/json")
 
   def getAdaEmbedding(text: String): List[Double] = {
     val input = text.replaceAll("\n", " ")
-    val req = CreateEmbeddingRequest(input)
+    val req = CreateEmbeddingRequest(input, "text-embedding-ada-002")
     val data = requests.post("https://api.openai.com/v1/embeddings", headers = headers, data = write(req)).data.toString()
     val response = read[CreateEmbeddingResponse](data)
     response.data.head.embedding
@@ -116,9 +124,17 @@ class OpenAI(val apiKey: String) {
 
   def completionCreate(prompt: String, temperature: Double = 0.5, maxToken: Int = 100): String = {
     val engine = "text-davinci-003"
-    val req = CreateCompletionRequest(model = engine, prompt = prompt, temperature = temperature, max_tokens = maxToken)
+    val req = CreateCompletionRequest(model = engine,
+      prompt = prompt,
+      temperature = temperature,
+      max_tokens = maxToken,
+      top_p = 1,
+      n = 1,
+      stream = false,
+      frequency_penalty = 0.0, presence_penalty = 0.0
+    )
 
-    val data = requests.post("https://platform.openai.com/docs/api-reference/completions/create", headers = headers, data = write(req)).data.toString()
+    val data = requests.post("https://api.openai.com/v1/completions", headers = headers, data = write(req)).data.toString()
     val response = read[CreateCompletionResponse](data)
     response.choices.head.text.strip()
   }
@@ -128,12 +144,11 @@ class PineCone(val apiKey: String, val environment: String, val tableName: Strin
   val headers = Map("Api-Key" -> apiKey, "Accept" -> "text/plain", "Content-Type" -> "application/json")
 
   def init(): Unit = {
-    println(s"$CYAN$BOLD\n*****OBJECTIVE*****\n$RESET")
-
     // create index if it doesn't exist
-    getAllIndexes().contains(tableName) match {
-      case false => createIndex()
-      case true => println("Index already exists")
+    if (getAllIndexes().contains(tableName)) {
+      println("Index already exists")
+    } else {
+      createIndex()
     }
   }
 
@@ -151,12 +166,12 @@ class PineCone(val apiKey: String, val environment: String, val tableName: Strin
   def query(index: IndexResponse, queryEmbedding: List[Double], topK: Int, includeMetadata: Boolean): QueryResponse = {
     val query = QueryRequest(queryEmbedding, topK, includeMetadata)
 
-    val data = requests.post(s"https://${index.host}/${index.table}/query", headers = headers, data = write(query)).data.toString
-    read[QueryResponse](data)
+    val data = requests.post(s"https://${index.host}/query", headers = headers, data = write(query)).data
+    read[QueryResponse](data.toString)
   }
 
-  def createIndex(): Response = {
-    val body = CreateIndexRequest("cosine", "p1", tableName, demension)
+  private def createIndex(): Response = {
+    val body = CreateIndexRequest("cosine", "p1", tableName, demension, 1, 1)
     val url = s"https://controller.$environment.pinecone.io/databases" // val url = s"https://httpbin.org/post"
 
     try {
