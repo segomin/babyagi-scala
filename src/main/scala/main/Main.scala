@@ -51,40 +51,37 @@ case class Task(taskId: Int, taskName: String) {
 
 object TaskService {
 
-  def run(task: Task, pineCone: PineCone, openAI: OpenAI, objective: String): Unit = {
+  def run(taskInit: Task, pineCone: PineCone, openAI: OpenAI, objective: String): Unit = {
     var taskIdCounter = 1
     val taskList = mutable.Queue[Task]()
 
     val agent = Agent(pineCone, openAI, objective)
-    taskList.enqueue(task)
-    while (true) {
+    taskList.enqueue(taskInit)
+    while (taskList.nonEmpty) {
+      val task = taskList.dequeue()
       var thisTaskId = task.taskId
-      var enrichedResult: Map[String, String] = Map()
-      if (taskList.nonEmpty) {
-        println(s"$MAGENTA$BOLD\n*****TASK LIST*****\n$RESET")
-        for (elem <- taskList) {
-          elem.print()
-        }
 
-        //      # Step 1: Pull the first task
-        val task = taskList.dequeue()
-        println(s"$GREEN$BOLD\n*****NEXT TASK*****\n$RESET")
-        print(s"${task.taskId}: ${task.taskName}")
-
-        val result = agent.executionAgent(task.taskName)
-        thisTaskId = task.taskId
-        println(s"$YELLOW$BOLD\n*****TASK RESULT*****\n$RESET")
-        println(result)
-
-        //      # Step 2: Enrich result and store in Pinecone
-        enrichedResult = Map("data" -> result)
-        val resultsId = s"result_${task.taskId}"
-        val vector = enrichedResult.get("data")
-        pineCone.upsert(resultsId, openAI.getAdaEmbedding(vector.toString), Map("task" -> task.taskName, "result" -> result))
+      println(s"$MAGENTA$BOLD\n*****TASK LIST*****\n$RESET")
+      task.print()
+      for (elem <- taskList) {
+        elem.print()
       }
 
+      //      # Step 1: Pull the first task
+      println(s"$GREEN$BOLD\n*****NEXT TASK*****\n$RESET")
+      print(s"${task.taskId}: ${task.taskName}")
+
+      val result = agent.executionAgent(task.taskName)
+      thisTaskId = task.taskId
+      println(s"$YELLOW$BOLD\n*****TASK RESULT*****\n$RESET")
+      println(result)
+
+      //      # Step 2: Enrich result and store in Pinecone
+      val resultsId = s"result_${task.taskId}"
+      pineCone.upsert(resultsId, openAI.getAdaEmbedding(result), Map("task" -> task.taskName, "result" -> result))
+
       //      # Step 3: Create new tasks and reprioritize task list
-      val newTasks = agent.taskCreationAgent(objective, enrichedResult, task.taskName, taskList.map(a => a.taskName).toList)
+      val newTasks = agent.taskCreationAgent(objective, Map("data" -> result), task.taskName, taskList.map(a => a.taskName).toList)
 
       newTasks.foreach(newTask => {
         taskIdCounter += 1
