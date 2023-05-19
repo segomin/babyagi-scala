@@ -64,6 +64,12 @@ case class QueryItem(id: String, score: Double, values: List[Double], metadata: 
 //}
 
 /**
+ * Pinecone Upsert Request
+ */
+case class VectorRequest (vectors: List[PineVector]) derives ReadWriter
+case class PineVector (id: String, values: List[Double], metadata: Map[String, String]) derives ReadWriter
+
+/**
   * OpenAI Create embeddings
   *  https://platform.openai.com/docs/api-reference/embeddings/create
   */
