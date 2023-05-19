@@ -26,6 +26,7 @@ object Config {
 }
 
 
+// run with `-Dconfig.file=.env`
 @main
 def main(): Unit = {
   val pinecone = PineCone(Config.PINECONE_API_KEY, Config.PINECONE_ENVIRONMENT, Config.YOUR_TABLE_NAME, Config.PINECONE_DIMENSION)
